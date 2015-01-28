@@ -1,7 +1,9 @@
+// TODO: refatorar mensagem inicial (chamar cat ao invés de hardcoded)
+
 jQuery(function($, undefined) {
   const VERSION_ = "0.0.1";
   const CMDS_ = [
-    'cat', 'cd', 'clear', 'date', 'help', 'ls', 'pwd', 'version', 'whoami'
+    'cat', 'cd', 'clear', 'date', 'help', 'ls', 'pwd', 'version', 'whoami', "mkdir", "touch"
   ];
   const README_ = '\
       -----------------------------------\n\
@@ -11,22 +13,27 @@ jQuery(function($, undefined) {
 
   var host_ = "ALT";
 
-  var username_ = "anon";
+  var user_ = "anon";
 
-  var cwd_ = "/"
+  var cwd_ = "/home/anon"
 
   var fs_ = {
-    "README.txt": README_,
-    file0: "Lorem ipsum",
-    dir1: {
-      file1: "#1 AI Revolution\n\nDescrição do primeiro encontro.",
-      dir12: {
-        file12: "Another file"
+    home: {
+      anon: {
+        "README.txt": README_,
+        file0: "Lorem ipsum",
+        dir1: {
+          file1: "#1 AI Revolution\n\nDescrição do primeiro encontro.",
+          dir12: {
+            file12: "Another file"
+          }
+        },
+        emptydir: {}
       }
     }
   }
 
-  $('#terminal').terminal({
+  $terminal = $('#terminal').terminal({
     version: function () {
       this.echo(VERSION_);
     },
@@ -34,7 +41,7 @@ jQuery(function($, undefined) {
       this.echo("Commands available: " + CMDS_.join(', '));
     },
     whoami: function () {
-      this.echo(username_);
+      this.echo(user_);
     },
     date: function () {
       this.echo((new Date()).toLocaleString());
@@ -45,29 +52,83 @@ jQuery(function($, undefined) {
     pwd: function () {
       this.echo(cwd_);
     },
-    ls: function () {
-      list = ls_();
-      for (key in list) {
-        if (list[key] == "string")
-          this.echo("<span class='file'>" + key + "</span>", { raw: true });
-        else
-          this.echo("<span class='dir'>" + key + "</span>", { raw: true });
+    ls: function (path) {
+      if (path == undefined) path = ""
+      absolute_path = absolute_path_(path);
+      var dir = get_from_path_(absolute_path);
+      if (typeof dir == "object") {
+        for (key in dir) {
+          if (typeof(dir[key]) == "string")
+            this.echo("<span class='file'>" + key + "</span>", { raw: true });
+          else
+            this.echo("<span class='dir'>" + key + "</span>", { raw: true });
+        }
+      } else if (typeof dir == "string") {
+        this.echo(path);
+      } else {
+        this.echo("ls: cannot access " + path + ": No such file or directory")
       }
     },
     cd: function(path) {
+      if (path == undefined) path = home_()
       absolute_path = absolute_path_(path);
-      cwd_ = absolute_path;
-      this.set_prompt(prompt_());
+      dest = get_from_path_(absolute_path);
+      if (typeof dest == "object") {
+        cwd_ = absolute_path;
+        this.set_prompt(prompt_());
+      } else if (typeof dest == "string") {
+        this.error("bash: cd: test: Not a directory")
+      } else {
+        this.error("bash: cd: " + path + ": No such file or directory")
+      }
     },
-    cat: function (filename) {
-      try {
-        object = path_to_object_(filename);
-        if (typeof object == "string")
-          this.echo(object);
+    cat: function (path) {
+      if (path == undefined) return;
+      absolute_path = absolute_path_(path)
+      file = get_from_path_(absolute_path);
+      if (typeof file == "string")
+        this.echo(file);
+      else if (typeof file == "object")
+          this.error("cat: " + path + ": Is a directory")
+      else
+        this.error("cat: " + path + ": No such file or directory");
+    },
+    mkdir: function(path) {
+      absolute_path = absolute_path_(path);
+      newdir = get_from_path_(absolute_path);
+      if (newdir != undefined) {
+        this.error("mkdir: cannot create directory '" + path + "': File exists")
+        return
+      }
+      parentdir = get_from_path_(parent_(absolute_path));
+      if (parentdir == undefined) {
+        this.error("mkdir: cannot create directory '" + path + "': No such file or directory")
+        return
+      }
+      set_to_path_(absolute_path, {});
+    },
+    touch: function(path) {
+      absolute_path = absolute_path_(path);
+      dest = get_from_path_(absolute_path);
+      if (dest == undefined) set_to_path_(absolute_path, "");
+    },
+    rm: function(flag, path) {
+      if (path == undefined) path = flag;
+      if (path == undefined) { 
+        this.error("rm: missing operand");
+        return;
+      }
+      absolute_path = absolute_path_(path);
+      target = get_from_path_(absolute_path);
+      if (typeof target == "string") {
+        remove_from_path_(absolute_path);
+      } else if (typeof target == "object") {
+        if (flag.toLowerCase() == "-r")
+          remove_from_path_(absolute_path);
         else
-          this.error("cat: " + filename + ": Is a directory")
-      } catch (e) {
-        this.error("cat: " + filename + ": No such file or directory");
+          this.error("rm: cannot remove '" + path + "': Is a directory")
+      } else {
+        this.error("rm: cannot remove '" + path + "': No such file or directory")
       }
     }
   }, {
@@ -75,6 +136,7 @@ jQuery(function($, undefined) {
     name: 'alt',
     height: "100%",
     width: "100%",
+    checkArity: false,
     prompt: prompt_(),
     processArguments: function(string) {
       var command_re = /('[^']*'|"(\\"|[^"])*"|(\\ |[^ ])+|[\w-]+)/g;
@@ -92,79 +154,82 @@ jQuery(function($, undefined) {
     }
   });
 
+  function prompt_ (cwd) {
+    var cwd = cwd_.replace(RegExp("^\\/home\\/" + user_), "~")
+    return user_ + '@' + host_ + ':' + cwd + '$ ';
+  }
+
+  function home_ () {
+    return "/home/" + user_
+  }
+
+  function parent_(path) {
+    var path = path.replace(/\/$/, "");
+    return path.substring(0, path.lastIndexOf("/"));
+  }
+
+  function path_to_array_(path) {
+    var dirs = path.split("/");
+    while (dirs.indexOf("") != -1) {
+      i = dirs.indexOf("");
+      dirs.splice(i, 1)
+    }
+    return dirs
+  }
+
   function absolute_path_ (path) {
     // Remove leading "./"
     path = path.replace(/^\.\//, "");
+    // Replace leading "~"
+    path = path.replace(/^\~/, home_());
     // If relative path, merge path with current directory
     if (path[0] != "/") path = cwd_.replace(/\/$/, "") + "/" + path;
-    // Remove leading and trailing "/"
-    path = path.replace(/^\/|\/$/g, "");
-    var dirs = path.split("/");
-    // Leave dirs array empty if root path "/"
-    if (dirs[0] == "") dirs = dirs.slice(1);
+    // Convert path to array of diretories
+    var dirs = path_to_array_(path);
     // Remove all ".."
     while (dirs.indexOf("..") != -1) {
       i = dirs.indexOf("..");
       dirs.splice(i - 1, 2)
     }
-    var fs = fs_
-    var dirsLength = dirs.length;
-    for (var i = 0; i < dirsLength; i++) {
-      dir = dirs[i];
-      fs = fs[dir]
-      if (fs == undefined) {
-        this.error("bash: cd: " + path + ": No such file or directory")
-        return;
-      }
-    }
     return "/" + dirs.join("/");
   }
 
-  function path_to_object_ (path) {
-    absolute_path = absolute_path_(path);
-    var dirs = absolute_path.split("/");
-    // Leave dirs array empty if root path "/"
-    if (dirs[0] == "") dirs = dirs.slice(1);
+  function get_from_path_(path) {
     var fs = fs_;
-    var dirsLength = dirs.length;
-    for (var i = 0; i < dirsLength; i++) {
-      dir = dirs[i];
-      fs = fs[dir];
-      if (fs == undefined) {
-        this.error("bash: cd: " + path + ": No such file or directory")
-        return;
-      }
+    var dirs = path_to_array_(path);
+    var len = dirs.length;
+    for(var i = 0; i < len-1; i++) {
+        var elem = dirs[i];
+        if(!fs[elem]) return undefined;
+        fs = fs[elem];
     }
-    return fs;
+
+    return fs[dirs[len-1]];
   }
 
-  function ls_ () {
-    list = {}
-    var dirs = cwd_.split("/");
-    if (dirs[0] == '.' || dirs[0] == '') {
-      dirs = dirs.slice(1);
-    }
-    if (dirs[dirs.length - 1] == '') {
-      dirs = dirs.slice(0, dirs.length - 1)
-    }
+  function set_to_path_(path, value) {
     var fs = fs_;
-    var dirsLength = dirs.length;
-    for (var i = 0; i < dirsLength; i++) {
-      dir = dirs[i];
-      fs = fs[dir]
-      if (fs == undefined) {
-        this.error("bash: cd: " + path + ": No such file or directory")
-        return;
-      }
+    var dirs = path_to_array_(path);
+    var len = dirs.length;
+    for(var i = 0; i < len-1; i++) {
+      var elem = dirs[i];
+      if(!fs[elem]) fs[elem] = {}
+      fs = fs[elem];
     }
-    for (key in fs) {
-      list[key] = typeof fs[key]
-    }
-    console.log(list)
-    return list//.join('\n')
+
+    fs[dirs[len-1]] = value;
   }
 
-  function prompt_ (cwd) {
-    return username_ + '@' + host_ + ':' + cwd_ + '$ ';
+  function remove_from_path_(path) {
+    var fs = fs_;
+    var dirs = path_to_array_(path);
+    var len = dirs.length;
+    for(var i = 0; i < len-1; i++) {
+      var elem = dirs[i];
+      if(!fs[elem]) fs[elem] = {}
+      fs = fs[elem];
+    }
+
+    delete fs[dirs[len-1]];
   }
 });
